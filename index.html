@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="th">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Daily Report</title>
+    <style>
+      table {
+        border-collapse: collapse;
+        width: 100%;
+      }
+      table,
+      th,
+      td {
+        border: 1px solid black;
+      }
+      th,
+      td {
+        text-align: center;
+        vertical-align: middle;
+        padding: 5px;
+      }
+      #exportBtn {
+        margin-left: 10px;
+      }
+    </style>
+  </head>
+  <body>
+    <h2>บันทึกรายงานประจำวัน ฝ่ายปฎิบัติการเทกอง</h2>
+
+    <label>ID:</label>
+    <input type="text" id="op_id" disabled /><br /><br />
+
+    <label>วันที่:</label>
+    <input type="date" id="op_date" /><br /><br />
+
+    <label>เครื่องจักร:</label>
+    <select id="machine"></select
+    ><br /><br />
+
+    <label>พนักงาน:</label>
+    <select id="operator"></select
+    ><br /><br />
+
+    <label>งาน:</label>
+    <input type="text" id="job" placeholder="กรอกงานที่ทำ..." /><br /><br />
+
+    <label>เริ่มต้น:</label>
+    <input type="datetime-local" id="start_time" /><br /><br />
+
+    <label>สิ้นสุด:</label>
+    <input type="datetime-local" id="stop_time" /><br /><br />
+
+    <button id="submit">บันทึก</button>
+    <button id="clearBtn">เคลียร์</button>
+    <button id="exportBtn">Export to Excel</button>
+    <button id="exportPdfBtn">Export to PDF</button>
+
+    <h3 id="reportTitle">รายงานทั้งหมด</h3>
+    <table id="reportTable">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>วันที่</th>
+          <th>เครื่องจักร</th>
+          <th>พนักงาน</th>
+          <th>งาน</th>
+          <th>เริ่มต้น</th>
+          <th>สิ้นสุด</th>
+          <th>เวลาทำงาน</th>
+          <th>
+            <button id="deleteBtn" onclick="deleteSelected()">
+              ลบที่เลือก
+            </button>
+            <br />
+            <input type="checkbox" id="checkAll" /> เลือกทั้งหมด
+          </th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+
+    <script>
+      function formatThaiDate(dateStr) {
+        if (!dateStr) return "";
+        const d = new Date(dateStr);
+        const thaiMonths = [
+          "มกราคม",
+          "กุมภาพันธ์",
+          "มีนาคม",
+          "เมษายน",
+          "พฤษภาคม",
+          "มิถุนายน",
+          "กรกฎาคม",
+          "สิงหาคม",
+          "กันยายน",
+          "ตุลาคม",
+          "พฤศจิกายน",
+          "ธันวาคม",
+        ];
+        const day = d.getDate();
+        const month = thaiMonths[d.getMonth()];
+        const year = d.getFullYear() + 543; // แปลงเป็น พ.ศ.
+        return `${day} ${month} ${year}`;
+      }
+
+      function updateReportTitle() {
+        const selectedDate = document.getElementById("op_date").value;
+        const title = selectedDate
+          ? `รายงานประจำวันที่ ${formatThaiDate(selectedDate)}`
+          : "รายงานทั้งหมด";
+        document.getElementById("reportTitle").textContent = title;
+      }
+
+      function formatDate(dateValue) {
+        if (!dateValue) return "";
+        if (dateValue instanceof Date) {
+          const yyyy = dateValue.getUTCFullYear();
+          const mm = String(dateValue.getUTCMonth() + 1).padStart(2, "0");
+          const dd = String(dateValue.getUTCDate()).padStart(2, "0");
+          return `${yyyy}-${mm}-${dd}`;
+        }
+        return dateValue.toString().slice(0, 10);
+      }
+
+      function formatDateTime(dateValue) {
+        if (!dateValue) return "";
+        if (dateValue instanceof Date) {
+          const yyyy = dateValue.getUTCFullYear();
+          const mm = String(dateValue.getUTCMonth() + 1).padStart(2, "0");
+          const dd = String(dateValue.getUTCDate()).padStart(2, "0");
+          const hh = String(dateValue.getUTCHours()).padStart(2, "0");
+          const min = String(dateValue.getUTCMinutes()).padStart(2, "0");
+          return `${yyyy}-${mm}-${dd} ${hh}:${min}`;
+        }
+        return dateValue.toString().replace("T", " ").slice(0, 16);
+      }
+
+      function formatHourMinute(totalMinutes) {
+        if (totalMinutes == null) return "";
+        const hours = Math.floor(totalMinutes / 60);
+        const minutes = totalMinutes % 60;
+        return `${hours.toString().padStart(2, "0")}:${minutes
+          .toString()
+          .padStart(2, "0")}`;
+      }
+
+      function getDefaultDateTime(hour, minute) {
+        const now = new Date();
+        now.setHours(hour, minute, 0, 0);
+        return now.toISOString().slice(0, 16);
+      }
+
+      // ✅ clear form (reset ค่า default)
+      function clearForm() {
+        const today = document.getElementById("op_date").value;
+        document.getElementById("op_id").value = "";
+        document.getElementById("machine").value = "";
+        document.getElementById("operator").value = "";
+        document.getElementById("job").value = "";
+        document.getElementById("start_time").value = `${today}T08:00`;
+        document.getElementById("stop_time").value = `${today}T17:00`;
+        document.getElementById("submit").textContent = "บันทึก";
+      }
+
+      // ======================= Load Lists =======================
+      async function loadLists() {
+        const lists = await window.api.getLists();
+        const machineSelect = document.getElementById("machine");
+        const operatorSelect = document.getElementById("operator");
+
+        machineSelect.innerHTML = `<option value="">-- เลือกเครื่องจักร --</option>`;
+        operatorSelect.innerHTML = `<option value="">-- เลือกพนักงาน --</option>`;
+
+        if (lists.machines) {
+          // ✅ เรียงลำดับก่อน
+          lists.machines
+            .sort((a, b) => a.localeCompare(b, "th")) // th → เรียงแบบภาษาไทยด้วย
+            .forEach(
+              (m) =>
+                (machineSelect.innerHTML += `<option value="${m}">${m}</option>`)
+            );
+        }
+
+        if (lists.operators) {
+          // ✅ เรียงลำดับก่อน
+          lists.operators
+            .sort((a, b) => a.localeCompare(b, "th"))
+            .forEach(
+              (o) =>
+                (operatorSelect.innerHTML += `<option value="${o}">${o}</option>`)
+            );
+        }
+      }
+
+      // ======================= Load Reports =======================
+      async function loadReports() {
+        const selectedDate = document.getElementById("op_date").value;
+        const reports = await window.api.getReports(selectedDate);
+        const tbody = document.querySelector("#reportTable tbody");
+        tbody.innerHTML = "";
+
+        if (reports && !reports.error) {
+          reports.forEach((r) => {
+            const tr = document.createElement("tr");
+            tr.innerHTML = `
+              <td>${r.op_id}</td>
+              <td>${formatDate(r.op_date)}</td>
+              <td>${r.machine || ""}</td>
+              <td>${r.operator || ""}</td>
+              <td>${r.job || ""}</td>
+              <td>${formatDateTime(r.start_time)}</td>
+              <td>${formatDateTime(r.stop_time)}</td>
+              <td>${formatHourMinute(r.op_hour)}</td>
+              <td><input type="checkbox" class="rowCheck" value="${r.op_id}"></td>
+            `;
+            tr.addEventListener("click", () => {
+              document.getElementById("op_id").value = r.op_id;
+              document.getElementById("op_date").value = formatDate(r.op_date);
+              document.getElementById("machine").value = r.machine || "";
+              document.getElementById("operator").value = r.operator || "";
+              document.getElementById("job").value = r.job || "";
+              if (r.start_time)
+                document.getElementById("start_time").value = new Date(
+                  r.start_time
+                )
+                  .toISOString()
+                  .slice(0, 16);
+              if (r.stop_time)
+                document.getElementById("stop_time").value = new Date(
+                  r.stop_time
+                )
+                  .toISOString()
+                  .slice(0, 16);
+              document.getElementById("submit").textContent = "อัพเดท";
+            });
+            tbody.appendChild(tr);
+          });
+        }
+
+        document
+          .getElementById("checkAll")
+          .addEventListener("change", function () {
+            document
+              .querySelectorAll(".rowCheck")
+              .forEach((cb) => (cb.checked = this.checked));
+          });
+      }
+
+      // ======================= Delete =======================
+      async function deleteSelected() {
+        const checked = Array.from(
+          document.querySelectorAll(".rowCheck:checked")
+        ).map((cb) => parseInt(cb.value));
+        if (checked.length === 0) {
+          alert("กรุณาเลือกข้อมูลที่จะลบ");
+          return;
+        }
+        if (confirm(`คุณแน่ใจว่าต้องการลบ ${checked.length} รายการนี้?`)) {
+          const res = await window.api.deleteMultiple(checked);
+          alert(res.message || res.error);
+          await loadReports();
+
+          // ✅ รีเซ็ตฟอร์มหลังจากลบเสร็จ
+          clearForm();
+        }
+      }
+
+      // ======================= Export =======================
+      async function exportExcel() {
+        const selectedDate = document.getElementById("op_date").value;
+        const res = await window.api.exportExcel(selectedDate);
+        if (res.success) alert("✅ " + res.message + "\nไฟล์: " + res.path);
+        else alert("❌ Export ล้มเหลว: " + res.error);
+      }
+
+      async function exportPDF() {
+        const selectedDate = document.getElementById("op_date").value;
+        const res = await window.api.exportPDF(selectedDate);
+        if (res.success) alert("✅ " + res.message + "\nไฟล์: " + res.path);
+        else alert("❌ Export PDF ล้มเหลว: " + res.error);
+      }
+
+      // ======================= Init =======================
+      window.addEventListener("DOMContentLoaded", () => {
+        document.getElementById("op_date").value = new Date()
+          .toISOString()
+          .split("T")[0];
+        updateReportTitle();
+        document.getElementById("start_time").value = getDefaultDateTime(8, 0);
+        document.getElementById("stop_time").value = getDefaultDateTime(17, 0);
+
+        document
+          .getElementById("submit")
+          .addEventListener("click", async () => {
+            const data = {
+              op_id: document.getElementById("op_id").value || null,
+              op_date: document.getElementById("op_date").value,
+              machine: document.getElementById("machine").value,
+              operator: document.getElementById("operator").value,
+              job: document.getElementById("job").value,
+              start_time: document.getElementById("start_time").value,
+              stop_time: document.getElementById("stop_time").value,
+            };
+            const res = data.op_id
+              ? await window.api.updateReport(data)
+              : await window.api.saveReport(data);
+            alert(res.message || res.error);
+            await loadReports();
+            clearForm();
+          });
+
+        document.getElementById("clearBtn").addEventListener("click", () => {
+          clearForm();
+        });
+
+        document.getElementById("op_date").addEventListener("change", () => {
+          updateReportTitle();
+          clearForm();
+          loadReports();
+        });
+
+        document
+          .getElementById("exportBtn")
+          .addEventListener("click", exportExcel);
+        document
+          .getElementById("exportPdfBtn")
+          .addEventListener("click", exportPDF);
+
+        loadLists();
+        loadReports();
+      });
+    </script>
+  </body>
+</html>

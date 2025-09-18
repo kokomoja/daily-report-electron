@@ -1,0 +1,49 @@
+{
+  "name": "daily-report-electron",
+  "version": "1.0.0",
+  "description": "Daily Report Electron App",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder"
+  },
+  "author": "MIMOTTOL",
+  "license": "PCT",
+  "dependencies": {
+    "exceljs": "^4.4.0",
+    "fontkit": "^2.0.4",
+    "mssql": "^10.0.0",
+    "pdfkit": "^0.17.2",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "electron": "^38.0.0",
+    "electron-builder": "^26.0.12",
+    "prettier": "3.6.2"
+  },
+  "build": {
+    "appId": "com.pcsiamgroup.dailyreport",
+    "productName": "Daily Report",
+    "files": [
+      "**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "fonts/",
+        "to": "fonts",
+        "filter": [
+          "*.ttf"
+        ]
+      }
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "assets/icon.ico",
+      "signAndEditExecutable": false,
+      "forceCodeSigning": false
+    }
+  }
+}
