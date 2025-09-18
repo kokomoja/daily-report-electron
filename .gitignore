@@ -1,35 +1,4 @@
-# ===============================
-# Node.js dependencies
-# ===============================
-node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-package-lock.json
-
-# ===============================
-# Build / Output files
-# ===============================
-dist/
-out/
-release/
-build/
-*.exe
-*.msi
-*.dmg
-*.app
-*.asar
-
-# ===============================
-# System files
-# ===============================
-.DS_Store
-Thumbs.db
-desktop.ini
-
-# ===============================
-# Logs and temp files
-# ===============================
-*.log
-*.tmp
-*.bak
+node_modules/ 
+dist/ 
+*.exe 
+*.asar 
