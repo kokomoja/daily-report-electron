@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="th">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Login</title>
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'"
+    />
+    <link rel="stylesheet" href="login.css" />
+  </head>
+  <body>
+    <h2>เข้าสู่ระบบ</h2>
+    <input type="text" id="login_user" placeholder="ชื่อผู้ใช้" />
+    <input type="password" id="login_password" placeholder="รหัสผ่าน" />
+    <button id="loginBtn">Login</button>
+
+    <hr />
+    <h3>เพิ่มผู้ใช้งานใหม่</h3>
+    <input type="text" id="new_user" placeholder="ชื่อผู้ใช้ใหม่" />
+    <input type="password" id="new_pass" placeholder="รหัสผ่านใหม่" />
+    <input type="text" id="new_name" placeholder="ชื่อจริงของผู้ใช้" />
+    <input type="password" id="secret" placeholder="รหัสลับยืนยัน" />
+    <button id="addUserBtn">เพิ่มผู้ใช้งาน</button>
+    <p
+      id="status"
+      style="color: green; font-weight: bold; margin-top: 10px"
+    ></p>
+    <script src="login.js"></script>
+  </body>
+</html>

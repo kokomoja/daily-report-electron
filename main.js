@@ -23,7 +23,7 @@ app.commandLine.appendSwitch("disable-gpu-shader-disk-cache");
 
 let mainWindow;
 
-function createWindow() {
+function createWindow(file) {
   mainWindow = new BrowserWindow({
     width: 1000,
     height: 700,
@@ -33,11 +33,12 @@ function createWindow() {
       nodeIntegration: false,
     },
   });
-
-  mainWindow.loadFile(path.join(__dirname, "index.html"));
+  mainWindow.loadFile(path.join(__dirname, file));
 }
 
-app.on("ready", createWindow);
+app.on("ready", () => {
+  createWindow("login.html"); // ✅ เริ่มที่หน้า login
+});
 
 function toLocalDateTime(dateStr) {
   if (!dateStr) return null;
@@ -81,6 +82,56 @@ function getFontPath(fontFile) {
 }
 
 // ====================== HANDLERS ======================
+ipcMain.handle("login-check", async (event, data) => {
+  try {
+    const pool = await sql.connect(config);
+    const result = await pool
+      .request()
+      .input("user", sql.VarChar(50), data.user)
+      .input("pass", sql.VarChar(50), data.pass)
+      .query(
+        "SELECT login_user, username FROM loginID WHERE login_user=@user AND login_password=@pass"
+      );
+
+    if (result.recordset.length > 0) {
+      const user = result.recordset[0];
+      return {
+        success: true,
+        message: "เข้าสู่ระบบสำเร็จ",
+        login_user: user.login_user,
+        username: user.username,
+      };
+    } else {
+      return { success: false, message: "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง" };
+    }
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle("add-user", async (event, data) => {
+  try {
+    // ✅ ตรวจสอบรหัสลับก่อน
+    if (data.secret !== "0845535000721") {
+      return { success: false, message: "❌ รหัสลับไม่ถูกต้อง" };
+    }
+
+    const pool = await sql.connect(config);
+    await pool
+      .request()
+      .input("login_user", sql.VarChar(50), data.login_user)
+      .input("login_password", sql.VarChar(50), data.login_password)
+      .input("username", sql.VarChar(50), data.username).query(`
+    INSERT INTO loginID (login_user, login_password, username)
+    VALUES (@login_user, @login_password, @username)
+  `);
+
+    return { success: true, message: "✅ เพิ่มผู้ใช้งานสำเร็จ" };
+  } catch (err) {
+    console.error("add-user error:", err);
+    return { success: false, error: err.message };
+  }
+});
 
 ipcMain.handle("get-lists", async () => {
   try {
@@ -111,10 +162,13 @@ ipcMain.handle("insert-report", async (event, data) => {
       .input("operator", sql.VarChar(50), data.operator)
       .input("job", sql.VarChar(100), data.job)
       .input("start_time", sql.DateTime, toLocalDateTime(data.start_time))
-      .input("stop_time", sql.DateTime, toLocalDateTime(data.stop_time)).query(`
-        INSERT INTO dailyReport (op_date, machine, operator, job, start_time, stop_time, op_hour)
+      .input("stop_time", sql.DateTime, toLocalDateTime(data.stop_time))
+      .input("recorder_name", sql.VarChar(50), data.recorder_name) // ✅ เพิ่ม
+      .query(`
+        INSERT INTO dailyReport 
+        (op_date, machine, operator, job, start_time, stop_time, op_hour, recorder_name, time_stamp)
         VALUES (@op_date, @machine, @operator, @job, @start_time, @stop_time,
-        DATEDIFF(MINUTE, @start_time, @stop_time))
+          DATEDIFF(MINUTE, @start_time, @stop_time), @recorder_name, GETDATE())
       `);
 
     return { success: true, message: "บันทึกเรียบร้อย" };
@@ -135,13 +189,18 @@ ipcMain.handle("update-report", async (event, data) => {
       .input("operator", sql.VarChar(50), data.operator)
       .input("job", sql.VarChar(100), data.job)
       .input("start_time", sql.DateTime, toLocalDateTime(data.start_time))
-      .input("stop_time", sql.DateTime, toLocalDateTime(data.stop_time)).query(`
+      .input("stop_time", sql.DateTime, toLocalDateTime(data.stop_time))
+      .input("recorder_name", sql.VarChar(50), data.recorder_name) // ✅ เพิ่ม
+      .query(`
         UPDATE dailyReport
         SET op_date=@op_date, machine=@machine, operator=@operator, job=@job,
             start_time=@start_time, stop_time=@stop_time,
-            op_hour = DATEDIFF(MINUTE, @start_time, @stop_time)
+            op_hour = DATEDIFF(MINUTE, @start_time, @stop_time),
+            recorder_name=@recorder_name,
+            time_stamp=GETDATE()
         WHERE op_id=@op_id
       `);
+
     return { success: true, message: "อัพเดทเรียบร้อย" };
   } catch (err) {
     console.error("update error:", err);
@@ -152,7 +211,11 @@ ipcMain.handle("update-report", async (event, data) => {
 ipcMain.handle("get-reports", async (event, date) => {
   try {
     let pool = await sql.connect(config);
-    let query = "SELECT * FROM dailyReport";
+    let query = `
+      SELECT op_id, op_date, machine, operator, job, start_time, stop_time, 
+             op_hour, time_stamp, recorder_name 
+      FROM dailyReport
+    `;
     let request = pool.request();
     if (date) {
       query += " WHERE CAST(op_date AS DATE) = @date";

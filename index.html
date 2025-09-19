@@ -26,6 +26,7 @@
   </head>
   <body>
     <h2>บันทึกรายงานประจำวัน ฝ่ายปฎิบัติการเทกอง</h2>
+    <p id="welcome"></p>
 
     <label>ID:</label>
     <input type="text" id="op_id" disabled /><br /><br />
@@ -55,6 +56,11 @@
     <button id="exportBtn">Export to Excel</button>
     <button id="exportPdfBtn">Export to PDF</button>
 
+    <p
+      id="status"
+      style="color: green; font-weight: bold; margin-top: 10px"
+    ></p>
+
     <h3 id="reportTitle">รายงานทั้งหมด</h3>
     <table id="reportTable">
       <thead>
@@ -67,6 +73,9 @@
           <th>เริ่มต้น</th>
           <th>สิ้นสุด</th>
           <th>เวลาทำงาน</th>
+          <th>บันทึก/อัพเดท</th>
+          <th>ผู้บันทึก</th>
+
           <th>
             <button id="deleteBtn" onclick="deleteSelected()">
               ลบที่เลือก
@@ -203,16 +212,18 @@
           reports.forEach((r) => {
             const tr = document.createElement("tr");
             tr.innerHTML = `
-              <td>${r.op_id}</td>
-              <td>${formatDate(r.op_date)}</td>
-              <td>${r.machine || ""}</td>
-              <td>${r.operator || ""}</td>
-              <td>${r.job || ""}</td>
-              <td>${formatDateTime(r.start_time)}</td>
-              <td>${formatDateTime(r.stop_time)}</td>
-              <td>${formatHourMinute(r.op_hour)}</td>
-              <td><input type="checkbox" class="rowCheck" value="${r.op_id}"></td>
-            `;
+                    <td>${r.op_id}</td>
+                    <td>${formatDate(r.op_date)}</td>
+                    <td>${r.machine || ""}</td>
+                    <td>${r.operator || ""}</td>
+                    <td>${r.job || ""}</td>
+                    <td>${formatDateTime(r.start_time)}</td>
+                    <td>${formatDateTime(r.stop_time)}</td>
+                    <td>${formatHourMinute(r.op_hour)}</td>
+                    <td>${formatDateTime(r.time_stamp)}</td>
+                    <td>${r.recorder_name || ""}</td>
+                    <td><input type="checkbox" class="rowCheck" value="${r.op_id}"></td>
+                  `;
             tr.addEventListener("click", () => {
               document.getElementById("op_id").value = r.op_id;
               document.getElementById("op_date").value = formatDate(r.op_date);
@@ -255,14 +266,17 @@
           alert("กรุณาเลือกข้อมูลที่จะลบ");
           return;
         }
-        if (confirm(`คุณแน่ใจว่าต้องการลบ ${checked.length} รายการนี้?`)) {
-          const res = await window.api.deleteMultiple(checked);
-          alert(res.message || res.error);
-          await loadReports();
-
-          // ✅ รีเซ็ตฟอร์มหลังจากลบเสร็จ
-          clearForm();
+        if (checked.length === 0) {
+          document.getElementById("status").textContent =
+            "⚠️ กรุณาเลือกข้อมูลที่จะลบ";
+          return;
         }
+
+        const res = await window.api.deleteMultiple(checked);
+        document.getElementById("status").textContent =
+          res.message || res.error;
+        await loadReports();
+        clearForm();
       }
 
       // ======================= Export =======================
@@ -289,6 +303,11 @@
         document.getElementById("start_time").value = getDefaultDateTime(8, 0);
         document.getElementById("stop_time").value = getDefaultDateTime(17, 0);
 
+        document;
+        const username = localStorage.getItem("username") || "ไม่ทราบชื่อ";
+        document.getElementById("welcome").textContent =
+          "👋 สวัสดีคุณ " + username;
+
         document
           .getElementById("submit")
           .addEventListener("click", async () => {
@@ -300,24 +319,29 @@
               job: document.getElementById("job").value,
               start_time: document.getElementById("start_time").value,
               stop_time: document.getElementById("stop_time").value,
+              recorder_name: localStorage.getItem("username") || "ไม่ระบุ",
             };
-            const res = data.op_id
-              ? await window.api.updateReport(data)
-              : await window.api.saveReport(data);
-            alert(res.message || res.error);
+
+            let res;
+            if (data.op_id) res = await window.api.updateReport(data);
+            else res = await window.api.saveReport(data);
+
+            document.getElementById("status").textContent =
+              res.message || res.error;
+
             await loadReports();
             clearForm();
           });
-
-        document.getElementById("clearBtn").addEventListener("click", () => {
-          clearForm();
-        });
 
         document.getElementById("op_date").addEventListener("change", () => {
           updateReportTitle();
           clearForm();
           loadReports();
         });
+
+        document
+          .getElementById("clearBtn")
+          .addEventListener("click", () => clearForm());
 
         document
           .getElementById("exportBtn")
@@ -328,6 +352,12 @@
 
         loadLists();
         loadReports();
+      });
+
+      window.addEventListener("login-success", (e) => {
+        const user = e.detail;
+        document.getElementById("welcome").textContent =
+          "👋 สวัสดีคุณ " + user.username;
       });
     </script>
   </body>
