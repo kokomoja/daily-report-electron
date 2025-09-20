@@ -17,6 +17,12 @@ contextBridge.exposeInMainWorld("auth", {
   addUser: (data) => ipcRenderer.invoke("add-user", data),
 });
 
+contextBridge.exposeInMainWorld("opre", {
+  insert: (data) => ipcRenderer.invoke("insert-opre", data),
+  getCodes: () => ipcRenderer.invoke("get-opre-codes"),
+  getList: () => ipcRenderer.invoke("get-opre-list"),
+});
+
 contextBridge.exposeInMainWorld("excel", {
   exportTable: (reports, filename) => {
     // ✅ ใช้ formatDate / formatDateTime

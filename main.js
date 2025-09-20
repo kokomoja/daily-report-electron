@@ -152,6 +152,21 @@ ipcMain.handle("get-lists", async () => {
   }
 });
 
+ipcMain.handle("get-opre-list", async () => {
+  try {
+    let pool = await sql.connect(config);
+    const result = await pool.request().query(`
+      SELECT opre_id, opre_show 
+      FROM dailyReportRevision
+      ORDER BY opre_id DESC
+    `);
+    return result.recordset;
+  } catch (err) {
+    console.error("get-opre-list error:", err);
+    return { error: err.message };
+  }
+});
+
 ipcMain.handle("insert-report", async (event, data) => {
   try {
     let pool = await sql.connect(config);
@@ -163,12 +178,14 @@ ipcMain.handle("insert-report", async (event, data) => {
       .input("job", sql.VarChar(100), data.job)
       .input("start_time", sql.DateTime, toLocalDateTime(data.start_time))
       .input("stop_time", sql.DateTime, toLocalDateTime(data.stop_time))
-      .input("recorder_name", sql.VarChar(50), data.recorder_name) // ✅ เพิ่ม
+      .input("recorder_name", sql.VarChar(50), data.recorder_name)
+      .input("opre_id", sql.Int, data.opre_id || null) // ✅ เพิ่ม opre_id
       .query(`
-        INSERT INTO dailyReport 
-        (op_date, machine, operator, job, start_time, stop_time, op_hour, recorder_name, time_stamp)
+        INSERT INTO dailyReport
+        (op_date, machine, operator, job, start_time, stop_time,
+         op_hour, recorder_name, time_stamp, opre_id)
         VALUES (@op_date, @machine, @operator, @job, @start_time, @stop_time,
-          DATEDIFF(MINUTE, @start_time, @stop_time), @recorder_name, GETDATE())
+          DATEDIFF(MINUTE, @start_time, @stop_time), @recorder_name, GETDATE(), @opre_id)
       `);
 
     return { success: true, message: "บันทึกเรียบร้อย" };
@@ -190,14 +207,20 @@ ipcMain.handle("update-report", async (event, data) => {
       .input("job", sql.VarChar(100), data.job)
       .input("start_time", sql.DateTime, toLocalDateTime(data.start_time))
       .input("stop_time", sql.DateTime, toLocalDateTime(data.stop_time))
-      .input("recorder_name", sql.VarChar(50), data.recorder_name) // ✅ เพิ่ม
+      .input("recorder_name", sql.VarChar(50), data.recorder_name)
+      .input("opre_id", sql.Int, data.opre_id || null) // ✅ เพิ่ม opre_id
       .query(`
         UPDATE dailyReport
-        SET op_date=@op_date, machine=@machine, operator=@operator, job=@job,
-            start_time=@start_time, stop_time=@stop_time,
+        SET op_date=@op_date,
+            machine=@machine,
+            operator=@operator,
+            job=@job,
+            start_time=@start_time,
+            stop_time=@stop_time,
             op_hour = DATEDIFF(MINUTE, @start_time, @stop_time),
             recorder_name=@recorder_name,
-            time_stamp=GETDATE()
+            time_stamp=GETDATE(),
+            opre_id=@opre_id
         WHERE op_id=@op_id
       `);
 
@@ -212,21 +235,55 @@ ipcMain.handle("get-reports", async (event, date) => {
   try {
     let pool = await sql.connect(config);
     let query = `
-      SELECT op_id, op_date, machine, operator, job, start_time, stop_time, 
-             op_hour, time_stamp, recorder_name 
-      FROM dailyReport
-    `;
+  SELECT d.op_id, d.op_date, d.machine, d.operator, d.job,
+         d.start_time, d.stop_time,
+         d.op_hour, d.time_stamp, d.recorder_name,
+         d.opre_id,
+         r.opre_code,     -- ✅ เพิ่ม
+         r.opre_rev,      -- ✅ เพิ่ม
+         r.opre_eff,      -- ✅ เพิ่ม
+         r.opre_show
+  FROM dailyReport d
+  LEFT JOIN dailyReportRevision r ON d.opre_id = r.opre_id
+`;
+
     let request = pool.request();
     if (date) {
-      query += " WHERE CAST(op_date AS DATE) = @date";
+      query += " WHERE CAST(d.op_date AS DATE) = @date";
       request = request.input("date", sql.Date, date);
     }
-    query += " ORDER BY op_date DESC";
+    query += " ORDER BY d.op_date DESC";
+
     let result = await request.query(query);
     return result.recordset;
   } catch (err) {
     console.error("get-reports error:", err);
     return { error: err.message };
+  }
+});
+
+ipcMain.handle("insert-opre", async (event, data) => {
+  try {
+    let pool = await sql.connect(config);
+
+    // ✅ ประกอบค่า opre_show (เช่น CODE/REV/2025-09-20)
+    const opre_show = `${data.opre_code}/${data.opre_rev}/${data.opre_eff}`;
+
+    await pool
+      .request()
+      .input("opre_code", sql.VarChar(50), data.opre_code)
+      .input("opre_rev", sql.VarChar(50), data.opre_rev)
+      .input("opre_eff", sql.Date, data.opre_eff)
+      .input("opre_show", sql.VarChar(50), opre_show)
+      .input("opre_id", sql.Int, data.opre_id).query(`
+        INSERT INTO dailyReportRevision (opre_code, opre_rev, opre_eff, opre_show)
+        VALUES (@opre_code, @opre_rev, @opre_eff, @opre_show)
+      `);
+
+    return { success: true, message: "บันทึกข้อมูล OPRE สำเร็จ" };
+  } catch (err) {
+    console.error("insert-opre error:", err);
+    return { success: false, error: err.message };
   }
 });
 
@@ -293,48 +350,103 @@ ipcMain.handle("export-excel", async (event, date) => {
 ipcMain.handle("export-pdf", async (event, date) => {
   try {
     let pool = await sql.connect(config);
-    let query = "SELECT * FROM dailyReport";
+    let query = `
+      SELECT d.op_id, d.op_date, d.machine, d.operator, d.job,
+             d.start_time, d.stop_time, d.op_hour, d.time_stamp, d.recorder_name,
+             d.opre_id,
+             r.opre_show   -- ✅ ดึงค่า revision
+      FROM dailyReport d
+      LEFT JOIN dailyReportRevision r ON d.opre_id = r.opre_id
+    `;
+
     let request = pool.request();
     if (date) {
-      query += " WHERE CAST(op_date AS DATE) = @date";
+      query += " WHERE CAST(d.op_date AS DATE) = @date";
       request = request.input("date", sql.Date, date);
     }
-    query += " ORDER BY op_date DESC";
+    query += " ORDER BY d.op_date DESC";
+
     let result = await request.query(query);
+
     const reports = result.recordset;
 
     if (!reports || reports.length === 0) {
       return { success: false, error: "ไม่มีข้อมูล" };
     }
+    console.log("PDF data:", reports[0]);
 
+    // สร้าง PDF
     const exportPath = path.join(
       app.getPath("documents"),
       `daily_report_${Date.now()}.pdf`
     );
-    const doc = new PDFDocument({ margin: 30 });
+    const doc = new PDFDocument({
+      margin: 30,
+      size: "A4",
+      layout: "landscape",
+    });
+
     doc.pipe(fs.createWriteStream(exportPath));
 
     doc.registerFont(
       "THSarabunNew",
       path.join(__dirname, "fonts", "THSarabunNew.ttf")
     );
+
     doc.registerFont(
       "THSarabunNewBold",
-      path.join(__dirname, "fonts", "THSarabunNew Bold.ttf")
+      path.join(__dirname, "fonts", "THSarabunNew Bold.ttf") // ✅ ใช้ขีดกลาง
     );
+
+    // ✅ ใส่โลโก้มุมซ้ายบน
+    const logoPath = path.join(__dirname, "assets", "pct.png"); // อย่าลืมแปลงจาก .ico เป็น .png ก่อน
+    const logoSize = 70;
+    doc.image(logoPath, 30, 30, { width: logoSize });
 
     doc
       .font("THSarabunNewBold")
       .fontSize(26)
-      .text("บริษัท พี.ซี.ปิโตรเลียมแอนด์เทอร์มินอล จำกัด", {
+      .text("บริษัท พี.ซี.ปิโตรเลียมแอนด์เทอร์มินอล จำกัด", 50, 25, {
         align: "center",
       });
+
     doc.moveDown(0.3);
     doc
       .font("THSarabunNew")
-      .fontSize(16)
+      .fontSize(22)
       .text("แผนการปฏิบัติงานแผนกเทกอง / เครื่องมือหนัก", { align: "center" });
     doc.moveDown(0.2);
+
+    doc.save();
+    let revisionText = "-";
+    if (reports[0]?.opre_show) {
+      const parts = reports[0].opre_show.split("/");
+      const code = parts[0] || "";
+      const rev = parts[1] || "";
+      const eff = parts[2] || "";
+
+      revisionText =
+        `${code}\n` + `Revision : ${rev}\n` + `Effective Date : ${eff}`;
+    }
+
+    const boxWidth = 140;
+    const boxHeight = 65;
+    const boxX = doc.page.width - boxWidth - 40;
+    const boxY = 30;
+
+    doc.rect(boxX, boxY, boxWidth, boxHeight).stroke();
+    doc.font("THSarabunNewBold").fontSize(14);
+    const textHeight = doc.heightOfString(revisionText, {
+      width: boxWidth - 10,
+    });
+    const textY = boxY + (boxHeight - textHeight) / 2; // ตรงกลางกล่อง
+
+    doc.text(revisionText, boxX + 5, textY, {
+      width: boxWidth - 10,
+      align: "center", // ✅ จัดกลางแนวนอน
+    });
+    doc.restore();
+
     const reportDate = new Date(reports[0].op_date);
     const thaiMonths = [
       "มกราคม",
@@ -351,12 +463,21 @@ ipcMain.handle("export-pdf", async (event, date) => {
       "ธันวาคม",
     ];
     const formattedDate = `${reportDate.getDate()} ${thaiMonths[reportDate.getMonth()]} ${reportDate.getFullYear() + 543}`;
+
+    // ✅ ให้ข้อความวันที่อยู่ตรงกลาง ไม่ไปกินพื้นที่กล่องขวา
+    const centerWidth = 300; // ความกว้างโซนกลาง (ปรับได้)
+    const centerX = (doc.page.width - centerWidth) / 2; // คำนวณจุดเริ่มกลาง
+
     doc
       .font("THSarabunNew")
       .fontSize(16)
-      .text(`วันที่ ${formattedDate}`, { align: "center" });
-    doc.moveDown(1);
+      .text(`วันที่ ${formattedDate}`, centerX, 100, {
+        // y=80 เลื่อนลงไม่ให้ทับหัวบริษัท
+        width: centerWidth,
+        align: "center",
+      });
 
+    doc.moveDown(1);
     const headers = [
       "ลำดับ",
       "วันที่",

@@ -1,65 +1,514 @@
+// main.js
+const { app, BrowserWindow, ipcMain } = require("electron");
+const path = require("path");
+const sql = require("mssql");
+const XLSX = require("xlsx");
+const PDFDocument = require("pdfkit");
+const fs = require("fs");
 
+// Config SQL Server
+const config = {
+  server: "192.168.7.110",
+  database: "opDb",
+  user: "sa",
+  password: "123456",
+  options: {
+    encrypt: false,
+    trustServerCertificate: true,
+    instanceName: "sqlexpress",
+  },
+};
 
-<!doctype html>
-<html lang="th">
-  <head>
-    <meta charset="UTF-8" />
-    <title>Login</title>
-    <meta
-      http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'"
-    />
-    <style>
-      body {
-        font-family: sans-serif;
-        margin: 50px;
-        text-align: center;
-      }
-      input {
-        display: block;
-        margin: 10px auto;
-        padding: 5px;
-        width: 200px;
-      }
-      button {
-        margin-top: 10px;
-        padding: 5px 15px;
-      }
-    </style>
-  </head>
-  <body>
-    <h2>เข้าสู่ระบบ</h2>
-    <input type="text" id="login_user" placeholder="ชื่อผู้ใช้" />
-    <input type="password" id="login_password" placeholder="รหัสผ่าน" />
-    <button id="loginBtn">Login</button>
+app.commandLine.appendSwitch("disable-gpu-shader-disk-cache");
 
-    <script>
-      window.addEventListener("DOMContentLoaded", () => {
-        const loginBtn = document.getElementById("loginBtn");
+let mainWindow;
 
-        loginBtn.addEventListener("click", async () => {
-          const user = document.getElementById("login_user").value;
-          const pass = document.getElementById("login_password").value;
+function createWindow(file) {
+  mainWindow = new BrowserWindow({
+    width: 1000,
+    height: 700,
+    webPreferences: {
+      preload: path.join(__dirname, "preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  mainWindow.loadFile(path.join(__dirname, file));
+}
 
-          if (!user || !pass) {
-            alert("กรุณากรอกชื่อผู้ใช้และรหัสผ่าน");
-            return;
-          }
+app.on("ready", () => {
+  createWindow("login.html"); // ✅ เริ่มที่หน้า login
+});
 
-          const res = await window.auth.login({ user, pass });
+function toLocalDateTime(dateStr) {
+  if (!dateStr) return null;
+  const d = new Date(dateStr);
+  d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+  return d;
+}
 
-          if (res.success) {
-            console.log("✅ Login ผ่าน");
-            // ไปหน้า main
-            window.location = "index.html";
-          } else {
-            alert("❌ " + (res.message || res.error));
-          }
-        });
+function formatDateUTC(dateValue) {
+  if (!dateValue) return "";
+  const d = new Date(dateValue);
+  const yyyy = d.getUTCFullYear();
+  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(d.getUTCDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function formatDateTimeUTC(dateValue) {
+  if (!dateValue) return "";
+  const d = new Date(dateValue);
+  const yyyy = d.getUTCFullYear();
+  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(d.getUTCDate()).padStart(2, "0");
+  const hh = String(d.getUTCHours()).padStart(2, "0");
+  const min = String(d.getUTCMinutes()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd} ${hh}:${min}`;
+}
+
+function formatHourMinute(totalMinutes) {
+  if (totalMinutes == null) return "";
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return `${hours.toString().padStart(2, "0")}:${minutes.toString().padStart(2, "0")}`;
+}
+
+function getFontPath(fontFile) {
+  if (fs.existsSync(path.join(__dirname, "fonts", fontFile))) {
+    return path.join(__dirname, "fonts", fontFile); // dev mode
+  }
+  return path.join(process.resourcesPath, "fonts", fontFile); // build exe
+}
+
+// ====================== HANDLERS ======================
+ipcMain.handle("login-check", async (event, data) => {
+  try {
+    const pool = await sql.connect(config);
+    const result = await pool
+      .request()
+      .input("user", sql.VarChar(50), data.user)
+      .input("pass", sql.VarChar(50), data.pass)
+      .query(
+        "SELECT login_user, username FROM loginID WHERE login_user=@user AND login_password=@pass"
+      );
+
+    if (result.recordset.length > 0) {
+      const user = result.recordset[0];
+      return {
+        success: true,
+        message: "เข้าสู่ระบบสำเร็จ",
+        login_user: user.login_user,
+        username: user.username,
+      };
+    } else {
+      return { success: false, message: "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง" };
+    }
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle("add-user", async (event, data) => {
+  try {
+    // ✅ ตรวจสอบรหัสลับก่อน
+    if (data.secret !== "0845535000721") {
+      return { success: false, message: "❌ รหัสลับไม่ถูกต้อง" };
+    }
+
+    const pool = await sql.connect(config);
+    await pool
+      .request()
+      .input("login_user", sql.VarChar(50), data.login_user)
+      .input("login_password", sql.VarChar(50), data.login_password)
+      .input("username", sql.VarChar(50), data.username).query(`
+    INSERT INTO loginID (login_user, login_password, username)
+    VALUES (@login_user, @login_password, @username)
+  `);
+
+    return { success: true, message: "✅ เพิ่มผู้ใช้งานสำเร็จ" };
+  } catch (err) {
+    console.error("add-user error:", err);
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle("get-lists", async () => {
+  try {
+    let pool = await sql.connect(config);
+    const machines = await pool
+      .request()
+      .query("SELECT machine FROM machineNumber");
+    const operators = await pool
+      .request()
+      .query("SELECT op_name FROM operatorName");
+    return {
+      machines: machines.recordset.map((m) => m.machine),
+      operators: operators.recordset.map((o) => o.op_name),
+    };
+  } catch (err) {
+    console.error("get-lists error:", err);
+    return { error: err.message };
+  }
+});
+
+ipcMain.handle("get-opre-list", async () => {
+  try {
+    let pool = await sql.connect(config);
+    const result = await pool.request().query(`
+      SELECT opre_id, opre_show
+      FROM dailyReportRevision
+      ORDER BY opre_id DESC
+    `);
+    return result.recordset;
+  } catch (err) {
+    console.error("get-opre-list error:", err);
+    return { error: err.message };
+  }
+});
+
+ipcMain.handle("insert-report", async (event, data) => {
+  try {
+    let pool = await sql.connect(config);
+    await pool
+      .request()
+      .input("op_date", sql.Date, data.op_date)
+      .input("machine", sql.VarChar(50), data.machine)
+      .input("operator", sql.VarChar(50), data.operator)
+      .input("job", sql.VarChar(100), data.job)
+      .input("start_time", sql.DateTime, toLocalDateTime(data.start_time))
+      .input("stop_time", sql.DateTime, toLocalDateTime(data.stop_time))
+      .input("recorder_name", sql.VarChar(50), data.recorder_name)
+      .input("opre_id", sql.Int, data.opre_id || null) // ✅ เพิ่ม opre_id
+      .query(`
+        INSERT INTO dailyReport
+        (op_date, machine, operator, job, start_time, stop_time,
+         op_hour, recorder_name, time_stamp, opre_id)
+        VALUES (@op_date, @machine, @operator, @job, @start_time, @stop_time,
+          DATEDIFF(MINUTE, @start_time, @stop_time), @recorder_name, GETDATE(), @opre_id)
+      `);
+
+    return { success: true, message: "บันทึกเรียบร้อย" };
+  } catch (err) {
+    console.error("insert error:", err);
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle("update-report", async (event, data) => {
+  try {
+    let pool = await sql.connect(config);
+    await pool
+      .request()
+      .input("op_id", sql.Int, data.op_id)
+      .input("op_date", sql.Date, data.op_date)
+      .input("machine", sql.VarChar(50), data.machine)
+      .input("operator", sql.VarChar(50), data.operator)
+      .input("job", sql.VarChar(100), data.job)
+      .input("start_time", sql.DateTime, toLocalDateTime(data.start_time))
+      .input("stop_time", sql.DateTime, toLocalDateTime(data.stop_time))
+      .input("recorder_name", sql.VarChar(50), data.recorder_name)
+      .input("opre_id", sql.Int, data.opre_id || null) // ✅ เพิ่ม opre_id
+      .query(`
+        UPDATE dailyReport
+        SET op_date=@op_date,
+            machine=@machine,
+            operator=@operator,
+            job=@job,
+            start_time=@start_time,
+            stop_time=@stop_time,
+            op_hour = DATEDIFF(MINUTE, @start_time, @stop_time),
+            recorder_name=@recorder_name,
+            time_stamp=GETDATE(),
+            opre_id=@opre_id
+        WHERE op_id=@op_id
+      `);
+
+    return { success: true, message: "อัพเดทเรียบร้อย" };
+  } catch (err) {
+    console.error("update error:", err);
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle("get-reports", async (event, date) => {
+  try {
+    let pool = await sql.connect(config);
+    let query = `
+  SELECT d.op_id, d.op_date, d.machine, d.operator, d.job,
+         d.start_time, d.stop_time, d.op_hour, d.time_stamp, d.recorder_name,
+         d.opre_id,
+         r.opre_show
+  FROM dailyReport d
+  LEFT JOIN dailyReportRevision r ON d.opre_id = r.opre_id
+`;
+
+    let request = pool.request();
+    if (date) {
+      query += " WHERE CAST(d.op_date AS DATE) = @date";
+      request = request.input("date", sql.Date, date);
+    }
+    query += " ORDER BY d.op_date DESC";
+
+    let result = await request.query(query);
+    return result.recordset;
+  } catch (err) {
+    console.error("get-reports error:", err);
+    return { error: err.message };
+  }
+});
+
+ipcMain.handle("insert-opre", async (event, data) => {
+  try {
+    let pool = await sql.connect(config);
+
+    // ✅ ประกอบค่า opre_show (เช่น CODE/REV/2025-09-20)
+    const opre_show = `${data.opre_code}/${data.opre_rev}/${data.opre_eff}`;
+
+    await pool
+      .request()
+      .input("opre_code", sql.VarChar(50), data.opre_code)
+      .input("opre_rev", sql.VarChar(50), data.opre_rev)
+      .input("opre_eff", sql.Date, data.opre_eff)
+      .input("opre_show", sql.VarChar(50), opre_show)
+      .input("opre_id", sql.Int, data.opre_id).query(`
+        INSERT INTO dailyReportRevision (opre_code, opre_rev, opre_eff, opre_show)
+        VALUES (@opre_code, @opre_rev, @opre_eff, @opre_show)
+      `);
+
+    return { success: true, message: "บันทึกข้อมูล OPRE สำเร็จ" };
+  } catch (err) {
+    console.error("insert-opre error:", err);
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle("delete-multiple", async (event, ids) => {
+  try {
+    if (!ids || ids.length === 0) {
+      return { success: false, error: "ไม่ได้เลือกข้อมูลที่จะลบ" };
+    }
+    let pool = await sql.connect(config);
+    await pool
+      .request()
+      .query(`DELETE FROM dailyReport WHERE op_id IN (${ids.join(",")})`);
+    return { success: true, message: "ลบข้อมูลเรียบร้อย" };
+  } catch (err) {
+    console.error("delete-multiple error:", err);
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle("export-excel", async (event, date) => {
+  try {
+    let pool = await sql.connect(config);
+    let query = "SELECT * FROM dailyReport";
+    let request = pool.request();
+    if (date) {
+      query += " WHERE CAST(op_date AS DATE) = @date";
+      request = request.input("date", sql.Date, date);
+    }
+    let result = await request.query(query);
+    const reports = result.recordset;
+
+    if (!reports || reports.length === 0) {
+      return { success: false, error: "ไม่มีข้อมูล" };
+    }
+
+    const data = reports.map((r) => ({
+      ลำดับ: r.op_id,
+      วันที่: formatDateUTC(r.op_date),
+      เครื่องจักร: r.machine,
+      พนักงาน: r.operator,
+      งาน: r.job,
+      เริ่มต้น: formatDateTimeUTC(r.start_time),
+      สิ้นสุด: formatDateTimeUTC(r.stop_time),
+      เวลาทำงาน: formatHourMinute(r.op_hour),
+    }));
+
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Reports");
+
+    const exportPath = path.join(
+      app.getPath("documents"),
+      `daily_report_${Date.now()}.xlsx`
+    );
+    XLSX.writeFile(wb, exportPath);
+
+    return { success: true, message: "Export สำเร็จ", path: exportPath };
+  } catch (err) {
+    console.error("export-excel error:", err);
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle("export-pdf", async (event, date) => {
+  try {
+    let pool = await sql.connect(config);
+    let query = "SELECT * FROM dailyReport";
+    let request = pool.request();
+    if (date) {
+      query += " WHERE CAST(op_date AS DATE) = @date";
+      request = request.input("date", sql.Date, date);
+    }
+    query += " ORDER BY op_date DESC";
+    let result = await request.query(query);
+    const reports = result.recordset;
+
+    if (!reports || reports.length === 0) {
+      return { success: false, error: "ไม่มีข้อมูล" };
+    }
+
+    const exportPath = path.join(
+      app.getPath("documents"),
+      `daily_report_${Date.now()}.pdf`
+    );
+    const doc = new PDFDocument({
+      margin: 30,
+      size: "A4",
+      layout: "landscape",
+    });
+    doc.pipe(fs.createWriteStream(exportPath));
+
+    doc.registerFont(
+      "THSarabunNew",
+      path.join(__dirname, "fonts", "THSarabunNew.ttf")
+    );
+
+    doc.registerFont(
+      "THSarabunNewBold",
+      path.join(__dirname, "fonts", "THSarabunNew Bold.ttf") // ✅ ใช้ขีดกลาง
+    );
+
+    // ✅ ใส่โลโก้มุมซ้ายบน
+    const logoPath = path.join(__dirname, "assets", "pct.png"); // อย่าลืมแปลงจาก .ico เป็น .png ก่อน
+    const logoSize = 70;
+    doc.image(logoPath, 30, 30, { width: logoSize });
+
+    doc
+      .font("THSarabunNewBold")
+      .fontSize(26)
+      .text("บริษัท พี.ซี.ปิโตรเลียมแอนด์เทอร์มินอล จำกัด", 50, 25, {
+        align: "center",
       });
-    </script>
-  </body>
-</html>
+
+    doc.moveDown(0.3);
+    doc
+      .font("THSarabunNew")
+      .fontSize(22)
+      .text("แผนการปฏิบัติงานแผนกเทกอง / เครื่องมือหนัก", { align: "center" });
+    doc.moveDown(0.2);
+
+    doc.save();
+    const revisionText = reports[0]?.opre_show || "-";
+    const boxWidth = 160;
+    const boxHeight = 40;
+    const boxX = doc.page.width - boxWidth - 40;
+    const boxY = 30;
+
+    doc.rect(boxX, boxY, boxWidth, boxHeight).stroke();
+    doc
+      .font("THSarabunNewBold")
+      .fontSize(16)
+      .text(`Revision: ${revisionText}`, boxX, boxY + 12, {
+        width: boxWidth,
+        align: "center",
+      });
+    doc.restore();
+
+    const reportDate = new Date(reports[0].op_date);
+    const thaiMonths = [
+      "มกราคม",
+      "กุมภาพันธ์",
+      "มีนาคม",
+      "เมษายน",
+      "พฤษภาคม",
+      "มิถุนายน",
+      "กรกฎาคม",
+      "สิงหาคม",
+      "กันยายน",
+      "ตุลาคม",
+      "พฤศจิกายน",
+      "ธันวาคม",
+    ];
+    const formattedDate = `${reportDate.getDate()} ${thaiMonths[reportDate.getMonth()]} ${reportDate.getFullYear() + 543}`;
+
+    // ✅ ให้ข้อความวันที่อยู่ตรงกลาง ไม่ไปกินพื้นที่กล่องขวา
+    const centerWidth = 300; // ความกว้างโซนกลาง (ปรับได้)
+    const centerX = (doc.page.width - centerWidth) / 2; // คำนวณจุดเริ่มกลาง
+
+    doc
+      .font("THSarabunNew")
+      .fontSize(16)
+      .text(`วันที่ ${formattedDate}`, centerX, 100, {
+        // y=80 เลื่อนลงไม่ให้ทับหัวบริษัท
+        width: centerWidth,
+        align: "center",
+      });
+
+    doc.moveDown(1);
+    const headers = [
+      "ลำดับ",
+      "วันที่",
+      "เครื่องจักร",
+      "พนักงาน",
+      "งาน",
+      "เริ่มต้น",
+      "สิ้นสุด",
+      "เวลาทำงาน",
+    ];
+    const columnWidths = [40, 65, 60, 150, 200, 100, 100, 60];
+    let startX = 30;
+    let startY = doc.y + 10;
+
+    headers.forEach((h, i) => {
+      doc.rect(startX, startY, columnWidths[i], 30).stroke();
+      doc.text(h, startX + 5, startY + 8, {
+        width: columnWidths[i] - 10,
+        align: "center",
+      });
+      startX += columnWidths[i];
+    });
+
+    let rowY = startY + 30;
+    reports.forEach((r, idx) => {
+      startX = 30;
+      const row = [
+        idx + 1,
+        formatDateUTC(r.op_date),
+        r.machine || "",
+        r.operator || "",
+        r.job || "",
+        formatDateTimeUTC(r.start_time),
+        formatDateTimeUTC(r.stop_time),
+        formatHourMinute(r.op_hour),
+      ];
+
+      row.forEach((cell, i) => {
+        doc.rect(startX, rowY, columnWidths[i], 25).stroke();
+        doc.text(cell.toString(), startX + 3, rowY + 7, {
+          width: columnWidths[i] - 6,
+          align: "center",
+        });
+        startX += columnWidths[i];
+      });
+      rowY += 25;
+
+      if (rowY > 550) {
+        doc.addPage({ size: "A4", layout: "landscape" });
+        rowY = 50;
+      }
+    });
+
+    doc.end();
+
+    return { success: true, message: "Export PDF สำเร็จ", path: exportPath };
+  } catch (err) {
+    console.error("export-pdf error:", err);
+    return { success: false, error: err.message };
+  }
+});
 
 
 <!doctype html>
@@ -89,11 +538,84 @@
     </style>
   </head>
   <body>
+    <nav style="background: #333; color: #fff; padding: 10px">
+      <span style="font-weight: bold">📑 ISO Control</span>
+      <button
+        id="menuInsertOpreBtn"
+        style="
+          float: right;
+          background: #4caf50;
+          color: white;
+          border: none;
+          padding: 5px 15px;
+          cursor: pointer;
+        "
+      >
+        ➕ Insert ISO Code
+      </button>
+    </nav>
+
+    <!-- Modal ฟอร์ม Insert OPRE -->
+    <div
+      id="opreModal"
+      style="
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.5);
+        text-align: center;
+        padding-top: 100px;
+      "
+    >
+      <div
+        style="
+          background: #fff;
+          display: inline-block;
+          padding: 20px;
+          border-radius: 8px;
+          min-width: 320px;
+        "
+      >
+        <h3>เพิ่มข้อมูล ISO Code</h3>
+
+        <label>ISO Code:</label><br />
+        <input type="text" id="opre_code" /><br /><br />
+
+        <label>Revision:</label><br />
+        <input type="text" id="opre_rev" /><br /><br />
+
+        <label>Effective Date:</label><br />
+        <input type="date" id="opre_eff" /><br /><br />
+
+        <button id="saveOpreBtn">บันทึก</button>
+        <button id="cancelOpreBtn">ยกเลิก</button>
+      </div>
+    </div>
+
     <h2>บันทึกรายงานประจำวัน ฝ่ายปฎิบัติการเทกอง</h2>
     <p id="welcome"></p>
-    <label>ID:</label>
-    <input type="text" id="op_id" disabled /><br /><br />
 
+    <div
+      style="
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        max-width: 600px;
+      "
+    >
+      <div>
+        <label>ID:</label>
+        <input type="text" id="op_id" disabled />
+      </div>
+      <div>
+        <label>Revision:</label>
+        <select id="opre_select" style="min-width: 200px"></select>
+      </div>
+    </div>
+    <br /><br />
     <label>วันที่:</label>
     <input type="date" id="op_date" /><br /><br />
 
@@ -119,6 +641,11 @@
     <button id="exportBtn">Export to Excel</button>
     <button id="exportPdfBtn">Export to PDF</button>
 
+    <p
+      id="status"
+      style="color: green; font-weight: bold; margin-top: 10px"
+    ></p>
+
     <h3 id="reportTitle">รายงานทั้งหมด</h3>
     <table id="reportTable">
       <thead>
@@ -131,6 +658,9 @@
           <th>เริ่มต้น</th>
           <th>สิ้นสุด</th>
           <th>เวลาทำงาน</th>
+          <th>บันทึก/อัพเดท</th>
+          <th>ผู้บันทึก</th>
+          <th>Revision</th>
           <th>
             <button id="deleteBtn" onclick="deleteSelected()">
               ลบที่เลือก
@@ -256,6 +786,21 @@
         }
       }
 
+      // ======================= Load OPRE List =======================
+
+      async function loadOpreList() {
+        const list = await window.opre.getList();
+        const select = document.getElementById("opre_select");
+        select.innerHTML = `<option value="">-- เลือก Revision --</option>`;
+
+        if (list && !list.error) {
+          list.forEach((item) => {
+            // ✅ แสดง opre_show
+            select.innerHTML += `<option value="${item.opre_id}">${item.opre_show}</option>`;
+          });
+        }
+      }
+
       // ======================= Load Reports =======================
       async function loadReports() {
         const selectedDate = document.getElementById("op_date").value;
@@ -267,16 +812,19 @@
           reports.forEach((r) => {
             const tr = document.createElement("tr");
             tr.innerHTML = `
-              <td>${r.op_id}</td>
-              <td>${formatDate(r.op_date)}</td>
-              <td>${r.machine || ""}</td>
-              <td>${r.operator || ""}</td>
-              <td>${r.job || ""}</td>
-              <td>${formatDateTime(r.start_time)}</td>
-              <td>${formatDateTime(r.stop_time)}</td>
-              <td>${formatHourMinute(r.op_hour)}</td>
-              <td><input type="checkbox" class="rowCheck" value="${r.op_id}"></td>
-            `;
+                    <td>${r.op_id}</td>
+                    <td>${formatDate(r.op_date)}</td>
+                    <td>${r.machine || ""}</td>
+                    <td>${r.operator || ""}</td>
+                    <td>${r.job || ""}</td>
+                    <td>${formatDateTime(r.start_time)}</td>
+                    <td>${formatDateTime(r.stop_time)}</td>
+                    <td>${formatHourMinute(r.op_hour)}</td>
+                    <td>${formatDateTime(r.time_stamp)}</td>
+                    <td>${r.recorder_name || ""}</td>
+                     <td>${r.opre_show || ""}</td>
+                    <td><input type="checkbox" class="rowCheck" value="${r.op_id}"></td>
+                  `;
             tr.addEventListener("click", () => {
               document.getElementById("op_id").value = r.op_id;
               document.getElementById("op_date").value = formatDate(r.op_date);
@@ -295,6 +843,21 @@
                 )
                   .toISOString()
                   .slice(0, 16);
+
+              if (r.opre_rev) {
+                const select = document.getElementById("opre_select");
+                // วนหา option ที่ตรงกับค่า opre_rev แล้วเลือกมัน
+                for (let option of select.options) {
+                  if (
+                    option.text === r.opre_show ||
+                    option.text.includes(r.opre_rev)
+                  ) {
+                    select.value = option.value;
+                    break;
+                  }
+                }
+              }
+
               document.getElementById("submit").textContent = "อัพเดท";
             });
             tbody.appendChild(tr);
@@ -319,14 +882,18 @@
           alert("กรุณาเลือกข้อมูลที่จะลบ");
           return;
         }
-        if (confirm(`คุณแน่ใจว่าต้องการลบ ${checked.length} รายการนี้?`)) {
-          const res = await window.api.deleteMultiple(checked);
-          alert(res.message || res.error);
-          await loadReports();
-
-          // ✅ รีเซ็ตฟอร์มหลังจากลบเสร็จ
-          clearForm();
+        if (checked.length === 0) {
+          document.getElementById("status").textContent =
+            "⚠️ กรุณาเลือกข้อมูลที่จะลบ";
+          return;
         }
+
+        const res = await window.api.deleteMultiple(checked);
+        document.getElementById("status").textContent =
+          res.message || res.error;
+        await loadReports();
+        loadOpreList();
+        clearForm();
       }
 
       // ======================= Export =======================
@@ -353,6 +920,11 @@
         document.getElementById("start_time").value = getDefaultDateTime(8, 0);
         document.getElementById("stop_time").value = getDefaultDateTime(17, 0);
 
+        document;
+        const username = localStorage.getItem("username") || "ไม่ทราบชื่อ";
+        document.getElementById("welcome").textContent =
+          "👋 สวัสดีคุณ " + username;
+
         document
           .getElementById("submit")
           .addEventListener("click", async () => {
@@ -364,24 +936,32 @@
               job: document.getElementById("job").value,
               start_time: document.getElementById("start_time").value,
               stop_time: document.getElementById("stop_time").value,
+              recorder_name: localStorage.getItem("username") || "ไม่ระบุ",
+              opre_id: document.getElementById("opre_select").value || null, // ✅ เพิ่มตรงนี้
             };
-            const res = data.op_id
-              ? await window.api.updateReport(data)
-              : await window.api.saveReport(data);
-            alert(res.message || res.error);
+
+            let res;
+            if (data.op_id) res = await window.api.updateReport(data);
+            else res = await window.api.saveReport(data);
+
+            document.getElementById("status").textContent =
+              res.message || res.error;
+
             await loadReports();
+            loadOpreList();
             clearForm();
           });
-
-        document.getElementById("clearBtn").addEventListener("click", () => {
-          clearForm();
-        });
 
         document.getElementById("op_date").addEventListener("change", () => {
           updateReportTitle();
           clearForm();
           loadReports();
+          loadOpreList();
         });
+
+        document
+          .getElementById("clearBtn")
+          .addEventListener("click", () => clearForm());
 
         document
           .getElementById("exportBtn")
@@ -392,7 +972,49 @@
 
         loadLists();
         loadReports();
+        loadOpreList();
       });
+
+      // ======================= OPRE Modal =======================
+      document
+        .getElementById("menuInsertOpreBtn")
+        .addEventListener("click", () => {
+          document.getElementById("opreModal").style.display = "block";
+        });
+
+      document.getElementById("cancelOpreBtn").addEventListener("click", () => {
+        document.getElementById("opreModal").style.display = "none";
+      });
+
+      document
+        .getElementById("saveOpreBtn")
+        .addEventListener("click", async () => {
+          const opre_code = document.getElementById("opre_code").value.trim();
+          const opre_rev = document.getElementById("opre_rev").value.trim();
+          const opre_eff = document.getElementById("opre_eff").value;
+
+          if (!opre_code || !opre_rev || !opre_eff) {
+            alert("⚠️ กรุณากรอกข้อมูลให้ครบ");
+            return;
+          }
+
+          const res = await window.opre.insert({
+            opre_code,
+            opre_rev,
+            opre_eff,
+          });
+
+          if (res.success) {
+            alert("✅ " + res.message);
+            // reset
+            document.getElementById("opre_code").value = "";
+            document.getElementById("opre_rev").value = "";
+            document.getElementById("opre_eff").value = "";
+            document.getElementById("opreModal").style.display = "none";
+          } else {
+            alert("❌ " + (res.error || "Insert ล้มเหลว"));
+          }
+        });
 
       window.addEventListener("login-success", (e) => {
         const user = e.detail;
@@ -402,477 +1024,3 @@
     </script>
   </body>
 </html>
-
-// main.js
-const { app, BrowserWindow, ipcMain } = require("electron");
-const path = require("path");
-const sql = require("mssql");
-const XLSX = require("xlsx");
-const PDFDocument = require("pdfkit");
-const fs = require("fs");
-
-// Config SQL Server
-const config = {
-  server: "192.168.7.110",
-  database: "opDb",
-  user: "sa",
-  password: "123456",
-  options: {
-    encrypt: false,
-    trustServerCertificate: true,
-    instanceName: "sqlexpress",
-  },
-};
-
-app.commandLine.appendSwitch("disable-gpu-shader-disk-cache");
-
-let mainWindow;
-
-function createWindow(file) {
-  mainWindow = new BrowserWindow({
-    width: 1000,
-    height: 700,
-    webPreferences: {
-      preload: path.join(__dirname, "preload.js"),
-      contextIsolation: true,
-      nodeIntegration: false,
-    },
-  });
-
-  mainWindow.loadFile(path.join(__dirname, file));
-}
-
-app.on("ready", () => {
-  createWindow("login.html");
-});
-
-function toLocalDateTime(dateStr) {
-  if (!dateStr) return null;
-  const d = new Date(dateStr);
-  d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
-  return d;
-}
-
-function formatDateUTC(dateValue) {
-  if (!dateValue) return "";
-  const d = new Date(dateValue);
-  const yyyy = d.getUTCFullYear();
-  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
-  const dd = String(d.getUTCDate()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd}`;
-}
-
-function formatDateTimeUTC(dateValue) {
-  if (!dateValue) return "";
-  const d = new Date(dateValue);
-  const yyyy = d.getUTCFullYear();
-  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
-  const dd = String(d.getUTCDate()).padStart(2, "0");
-  const hh = String(d.getUTCHours()).padStart(2, "0");
-  const min = String(d.getUTCMinutes()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd} ${hh}:${min}`;
-}
-
-function formatHourMinute(totalMinutes) {
-  if (totalMinutes == null) return "";
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  return `${hours.toString().padStart(2, "0")}:${minutes.toString().padStart(2, "0")}`;
-}
-
-function getFontPath(fontFile) {
-  if (fs.existsSync(path.join(__dirname, "fonts", fontFile))) {
-    return path.join(__dirname, "fonts", fontFile); // dev mode
-  }
-  return path.join(process.resourcesPath, "fonts", fontFile); // build exe
-}
-
-// ====================== HANDLERS ======================
-ipcMain.handle("login-check", async (event, data) => {
-  try {
-    const pool = await sql.connect(config);
-    const result = await pool
-      .request()
-      .input("user", sql.VarChar(50), data.user)
-      .input("pass", sql.VarChar(50), data.pass)
-      .query(
-        "SELECT * FROM loginID WHERE login_user=@user AND login_password=@pass"
-      );
-
-    if (result.recordset.length > 0) {
-      return { success: true, message: "เข้าสู่ระบบสำเร็จ" };
-    } else {
-      return { success: false, message: "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง" };
-    }
-  } catch (err) {
-    return { success: false, error: err.message };
-  }
-});
-
-ipcMain.handle("add-user", async (event, data) => {
-  try {
-    if (data.secret !== "0845535000721") {
-      return { success: false, message: "❌ รหัสลับไม่ถูกต้อง" };
-    }
-
-    const pool = await sql.connect(config);
-    await pool
-      .request()
-      .input("login_user", sql.VarChar(50), data.login_user)
-      .input("login_password", sql.VarChar(50), data.login_password)
-      .input("username", sql.VarChar(50), data.username)
-      .query(
-        "INSERT INTO loginID (login_user, login_password, usernam) VALUES (@login_user, @login_password, @username)"
-      );
-
-    return { success: true, message: "✅ เพิ่มผู้ใช้สำเร็จ" };
-  } catch (err) {
-    return { success: false, error: err.message };
-  }
-});
-
-ipcMain.handle("get-lists", async () => {
-  try {
-    let pool = await sql.connect(config);
-    const machines = await pool
-      .request()
-      .query("SELECT machine FROM machineNumber");
-    const operators = await pool
-      .request()
-      .query("SELECT op_name FROM operatorName");
-    return {
-      machines: machines.recordset.map((m) => m.machine),
-      operators: operators.recordset.map((o) => o.op_name),
-    };
-  } catch (err) {
-    console.error("get-lists error:", err);
-    return { error: err.message };
-  }
-});
-
-ipcMain.handle("insert-report", async (event, data) => {
-  try {
-    let pool = await sql.connect(config);
-    await pool
-      .request()
-      .input("op_date", sql.Date, data.op_date)
-      .input("machine", sql.VarChar(50), data.machine)
-      .input("operator", sql.VarChar(50), data.operator)
-      .input("job", sql.VarChar(100), data.job)
-      .input("start_time", sql.DateTime, toLocalDateTime(data.start_time))
-      .input("stop_time", sql.DateTime, toLocalDateTime(data.stop_time)).query(`
-        INSERT INTO dailyReport (op_date, machine, operator, job, start_time, stop_time, op_hour)
-        VALUES (@op_date, @machine, @operator, @job, @start_time, @stop_time,
-        DATEDIFF(MINUTE, @start_time, @stop_time))
-      `);
-
-    return { success: true, message: "บันทึกเรียบร้อย" };
-  } catch (err) {
-    console.error("insert error:", err);
-    return { success: false, error: err.message };
-  }
-});
-
-ipcMain.handle("update-report", async (event, data) => {
-  try {
-    let pool = await sql.connect(config);
-    await pool
-      .request()
-      .input("op_id", sql.Int, data.op_id)
-      .input("op_date", sql.Date, data.op_date)
-      .input("machine", sql.VarChar(50), data.machine)
-      .input("operator", sql.VarChar(50), data.operator)
-      .input("job", sql.VarChar(100), data.job)
-      .input("start_time", sql.DateTime, toLocalDateTime(data.start_time))
-      .input("stop_time", sql.DateTime, toLocalDateTime(data.stop_time)).query(`
-        UPDATE dailyReport
-        SET op_date=@op_date, machine=@machine, operator=@operator, job=@job,
-            start_time=@start_time, stop_time=@stop_time,
-            op_hour = DATEDIFF(MINUTE, @start_time, @stop_time)
-        WHERE op_id=@op_id
-      `);
-    return { success: true, message: "อัพเดทเรียบร้อย" };
-  } catch (err) {
-    console.error("update error:", err);
-    return { success: false, error: err.message };
-  }
-});
-
-ipcMain.handle("get-reports", async (event, date) => {
-  try {
-    let pool = await sql.connect(config);
-    let query = "SELECT * FROM dailyReport";
-    let request = pool.request();
-    if (date) {
-      query += " WHERE CAST(op_date AS DATE) = @date";
-      request = request.input("date", sql.Date, date);
-    }
-    query += " ORDER BY op_date DESC";
-    let result = await request.query(query);
-    return result.recordset;
-  } catch (err) {
-    console.error("get-reports error:", err);
-    return { error: err.message };
-  }
-});
-
-ipcMain.handle("delete-multiple", async (event, ids) => {
-  try {
-    if (!ids || ids.length === 0) {
-      return { success: false, error: "ไม่ได้เลือกข้อมูลที่จะลบ" };
-    }
-    let pool = await sql.connect(config);
-    await pool
-      .request()
-      .query(`DELETE FROM dailyReport WHERE op_id IN (${ids.join(",")})`);
-    return { success: true, message: "ลบข้อมูลเรียบร้อย" };
-  } catch (err) {
-    console.error("delete-multiple error:", err);
-    return { success: false, error: err.message };
-  }
-});
-
-ipcMain.handle("export-excel", async (event, date) => {
-  try {
-    let pool = await sql.connect(config);
-    let query = "SELECT * FROM dailyReport";
-    let request = pool.request();
-    if (date) {
-      query += " WHERE CAST(op_date AS DATE) = @date";
-      request = request.input("date", sql.Date, date);
-    }
-    let result = await request.query(query);
-    const reports = result.recordset;
-
-    if (!reports || reports.length === 0) {
-      return { success: false, error: "ไม่มีข้อมูล" };
-    }
-
-    const data = reports.map((r) => ({
-      ลำดับ: r.op_id,
-      วันที่: formatDateUTC(r.op_date),
-      เครื่องจักร: r.machine,
-      พนักงาน: r.operator,
-      งาน: r.job,
-      เริ่มต้น: formatDateTimeUTC(r.start_time),
-      สิ้นสุด: formatDateTimeUTC(r.stop_time),
-      เวลาทำงาน: formatHourMinute(r.op_hour),
-    }));
-
-    const ws = XLSX.utils.json_to_sheet(data);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Reports");
-
-    const exportPath = path.join(
-      app.getPath("documents"),
-      `daily_report_${Date.now()}.xlsx`
-    );
-    XLSX.writeFile(wb, exportPath);
-
-    return { success: true, message: "Export สำเร็จ", path: exportPath };
-  } catch (err) {
-    console.error("export-excel error:", err);
-    return { success: false, error: err.message };
-  }
-});
-
-ipcMain.handle("export-pdf", async (event, date) => {
-  try {
-    let pool = await sql.connect(config);
-    let query = "SELECT * FROM dailyReport";
-    let request = pool.request();
-    if (date) {
-      query += " WHERE CAST(op_date AS DATE) = @date";
-      request = request.input("date", sql.Date, date);
-    }
-    query += " ORDER BY op_date DESC";
-    let result = await request.query(query);
-    const reports = result.recordset;
-
-    if (!reports || reports.length === 0) {
-      return { success: false, error: "ไม่มีข้อมูล" };
-    }
-
-    const exportPath = path.join(
-      app.getPath("documents"),
-      `daily_report_${Date.now()}.pdf`
-    );
-    const doc = new PDFDocument({ margin: 30 });
-    doc.pipe(fs.createWriteStream(exportPath));
-
-    doc.registerFont(
-      "THSarabunNew",
-      path.join(__dirname, "fonts", "THSarabunNew.ttf")
-    );
-    doc.registerFont(
-      "THSarabunNewBold",
-      path.join(__dirname, "fonts", "THSarabunNew Bold.ttf")
-    );
-
-    doc
-      .font("THSarabunNewBold")
-      .fontSize(26)
-      .text("บริษัท พี.ซี.ปิโตรเลียมแอนด์เทอร์มินอล จำกัด", {
-        align: "center",
-      });
-    doc.moveDown(0.3);
-    doc
-      .font("THSarabunNew")
-      .fontSize(16)
-      .text("แผนการปฏิบัติงานแผนกเทกอง / เครื่องมือหนัก", { align: "center" });
-    doc.moveDown(0.2);
-    const reportDate = new Date(reports[0].op_date);
-    const thaiMonths = [
-      "มกราคม",
-      "กุมภาพันธ์",
-      "มีนาคม",
-      "เมษายน",
-      "พฤษภาคม",
-      "มิถุนายน",
-      "กรกฎาคม",
-      "สิงหาคม",
-      "กันยายน",
-      "ตุลาคม",
-      "พฤศจิกายน",
-      "ธันวาคม",
-    ];
-    const formattedDate = `${reportDate.getDate()} ${thaiMonths[reportDate.getMonth()]} ${reportDate.getFullYear() + 543}`;
-    doc
-      .font("THSarabunNew")
-      .fontSize(16)
-      .text(`วันที่ ${formattedDate}`, { align: "center" });
-    doc.moveDown(1);
-
-    const headers = [
-      "ลำดับ",
-      "วันที่",
-      "เครื่องจักร",
-      "พนักงาน",
-      "งาน",
-      "เริ่มต้น",
-      "สิ้นสุด",
-      "เวลาทำงาน",
-    ];
-    const columnWidths = [40, 65, 60, 150, 200, 100, 100, 60];
-    let startX = 30;
-    let startY = doc.y + 10;
-
-    headers.forEach((h, i) => {
-      doc.rect(startX, startY, columnWidths[i], 30).stroke();
-      doc.text(h, startX + 5, startY + 8, {
-        width: columnWidths[i] - 10,
-        align: "center",
-      });
-      startX += columnWidths[i];
-    });
-
-    let rowY = startY + 30;
-    reports.forEach((r, idx) => {
-      startX = 30;
-      const row = [
-        idx + 1,
-        formatDateUTC(r.op_date),
-        r.machine || "",
-        r.operator || "",
-        r.job || "",
-        formatDateTimeUTC(r.start_time),
-        formatDateTimeUTC(r.stop_time),
-        formatHourMinute(r.op_hour),
-      ];
-
-      row.forEach((cell, i) => {
-        doc.rect(startX, rowY, columnWidths[i], 25).stroke();
-        doc.text(cell.toString(), startX + 3, rowY + 7, {
-          width: columnWidths[i] - 6,
-          align: "center",
-        });
-        startX += columnWidths[i];
-      });
-      rowY += 25;
-
-      if (rowY > 550) {
-        doc.addPage({ size: "A4", layout: "landscape" });
-        rowY = 50;
-      }
-    });
-
-    doc.end();
-
-    return { success: true, message: "Export PDF สำเร็จ", path: exportPath };
-  } catch (err) {
-    console.error("export-pdf error:", err);
-    return { success: false, error: err.message };
-  }
-});
-
-// v2.7 preload setup
-const { contextBridge, ipcRenderer } = require("electron");
-
-contextBridge.exposeInMainWorld("api", {
-  getLists: () => ipcRenderer.invoke("get-lists"),
-  saveReport: (data) => ipcRenderer.invoke("insert-report", data),
-  updateReport: (data) => ipcRenderer.invoke("update-report", data),
-  getReports: (date) => ipcRenderer.invoke("get-reports", date),
-  deleteReport: (id) => ipcRenderer.invoke("delete-report", id),
-  deleteMultiple: (ids) => ipcRenderer.invoke("delete-multiple", ids),
-  exportExcel: (date) => ipcRenderer.invoke("export-excel", date),
-
-  exportPDF: (date) => ipcRenderer.invoke("export-pdf", date), // ✅ เพิ่ม PDF
-});
-
-contextBridge.exposeInMainWorld("auth", {
-  login: (data) => ipcRenderer.invoke("login-attempt", data),
-  addUser: (data) => ipcRenderer.invoke("add-user", data),
-});
-
-ipcRenderer.on("login-success", (event, user) => {
-  window.dispatchEvent(new CustomEvent("login-success", { detail: user }));
-});
-
-contextBridge.exposeInMainWorld("excel", {
-  exportTable: (reports, filename) => {
-    // ✅ ใช้ formatDate / formatDateTime
-    const data = reports.map((r) => ({
-      ลำดับ: r.op_id,
-      วันที่: formatDate(r.op_date),
-      เครื่องจักร: r.machine,
-      พนักงาน: r.operator,
-      งาน: r.job,
-      เริ่มต้น: formatDateTime(r.start_time),
-      สิ้นสุด: formatDateTime(r.stop_time),
-      เวลาทำงาน: formatHourMinute(r.op_hour),
-    }));
-
-    const ws = XLSX.utils.json_to_sheet(data);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Reports");
-    XLSX.writeFile(wb, filename || "daily_report.xlsx");
-  },
-});
-
-
-
-Delete constrain
-
-ธีแก้ (ทีละขั้น)
-
-หา constraint ที่ผูกกับ time_stamp
-
-SELECT name, object_id
-FROM sys.default_constraints
-WHERE parent_object_id = OBJECT_ID('dailyReport')
-  AND COL_NAME(parent_object_id, parent_column_id) = 'time_stamp';
-
-
-ตรงนี้จะคืนชื่อของ constraint (ในกรณีคุณก็คือ DF__dailyRepo__time___2739D489)
-
-ลบ constraint ก่อน
-
-ALTER TABLE dailyReport
-DROP CONSTRAINT DF__dailyRepo__time___2739D489;
-
-
-จากนั้นค่อยลบ column
-
-ALTER TABLE dailyReport
-DROP COLUMN time_stamp;

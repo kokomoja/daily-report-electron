@@ -25,12 +25,84 @@
     </style>
   </head>
   <body>
+    <nav style="background: #333; color: #fff; padding: 10px">
+      <span style="font-weight: bold">📑 ISO Control</span>
+      <button
+        id="menuInsertOpreBtn"
+        style="
+          float: right;
+          background: #4caf50;
+          color: white;
+          border: none;
+          padding: 5px 15px;
+          cursor: pointer;
+        "
+      >
+        ➕ Insert ISO Code
+      </button>
+    </nav>
+
+    <!-- Modal ฟอร์ม Insert OPRE -->
+    <div
+      id="opreModal"
+      style="
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.5);
+        text-align: center;
+        padding-top: 100px;
+      "
+    >
+      <div
+        style="
+          background: #fff;
+          display: inline-block;
+          padding: 20px;
+          border-radius: 8px;
+          min-width: 320px;
+        "
+      >
+        <h3>เพิ่มข้อมูล ISO Code</h3>
+
+        <label>ISO Code:</label><br />
+        <input type="text" id="opre_code" /><br /><br />
+
+        <label>Revision:</label><br />
+        <input type="text" id="opre_rev" /><br /><br />
+
+        <label>Effective Date:</label><br />
+        <input type="date" id="opre_eff" /><br /><br />
+
+        <button id="saveOpreBtn">บันทึก</button>
+        <button id="cancelOpreBtn">ยกเลิก</button>
+      </div>
+    </div>
+
     <h2>บันทึกรายงานประจำวัน ฝ่ายปฎิบัติการเทกอง</h2>
     <p id="welcome"></p>
 
-    <label>ID:</label>
-    <input type="text" id="op_id" disabled /><br /><br />
-
+    <div
+      style="
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        max-width: 600px;
+      "
+    >
+      <div>
+        <label>ID:</label>
+        <input type="text" id="op_id" disabled />
+      </div>
+      <div>
+        <label>Revision:</label>
+        <select id="opre_select" style="min-width: 200px"></select>
+      </div>
+    </div>
+    <br /><br />
     <label>วันที่:</label>
     <input type="date" id="op_date" /><br /><br />
 
@@ -75,7 +147,7 @@
           <th>เวลาทำงาน</th>
           <th>บันทึก/อัพเดท</th>
           <th>ผู้บันทึก</th>
-
+          <th>Revision</th>
           <th>
             <button id="deleteBtn" onclick="deleteSelected()">
               ลบที่เลือก
@@ -201,6 +273,21 @@
         }
       }
 
+      // ======================= Load OPRE List =======================
+
+      async function loadOpreList() {
+        const list = await window.opre.getList();
+        const select = document.getElementById("opre_select");
+        select.innerHTML = `<option value="">-- เลือก Revision --</option>`;
+
+        if (list && !list.error) {
+          list.forEach((item) => {
+            // ✅ แสดง opre_show
+            select.innerHTML += `<option value="${item.opre_id}">${item.opre_show}</option>`;
+          });
+        }
+      }
+
       // ======================= Load Reports =======================
       async function loadReports() {
         const selectedDate = document.getElementById("op_date").value;
@@ -222,6 +309,7 @@
                     <td>${formatHourMinute(r.op_hour)}</td>
                     <td>${formatDateTime(r.time_stamp)}</td>
                     <td>${r.recorder_name || ""}</td>
+                     <td>${r.opre_show || ""}</td>
                     <td><input type="checkbox" class="rowCheck" value="${r.op_id}"></td>
                   `;
             tr.addEventListener("click", () => {
@@ -242,6 +330,21 @@
                 )
                   .toISOString()
                   .slice(0, 16);
+
+              if (r.opre_rev) {
+                const select = document.getElementById("opre_select");
+                // วนหา option ที่ตรงกับค่า opre_rev แล้วเลือกมัน
+                for (let option of select.options) {
+                  if (
+                    option.text === r.opre_show ||
+                    option.text.includes(r.opre_rev)
+                  ) {
+                    select.value = option.value;
+                    break;
+                  }
+                }
+              }
+
               document.getElementById("submit").textContent = "อัพเดท";
             });
             tbody.appendChild(tr);
@@ -276,6 +379,7 @@
         document.getElementById("status").textContent =
           res.message || res.error;
         await loadReports();
+        loadOpreList();
         clearForm();
       }
 
@@ -320,6 +424,7 @@
               start_time: document.getElementById("start_time").value,
               stop_time: document.getElementById("stop_time").value,
               recorder_name: localStorage.getItem("username") || "ไม่ระบุ",
+              opre_id: document.getElementById("opre_select").value || null, // ✅ เพิ่มตรงนี้
             };
 
             let res;
@@ -330,6 +435,7 @@
               res.message || res.error;
 
             await loadReports();
+            loadOpreList();
             clearForm();
           });
 
@@ -337,6 +443,7 @@
           updateReportTitle();
           clearForm();
           loadReports();
+          loadOpreList();
         });
 
         document
@@ -352,7 +459,49 @@
 
         loadLists();
         loadReports();
+        loadOpreList();
       });
+
+      // ======================= OPRE Modal =======================
+      document
+        .getElementById("menuInsertOpreBtn")
+        .addEventListener("click", () => {
+          document.getElementById("opreModal").style.display = "block";
+        });
+
+      document.getElementById("cancelOpreBtn").addEventListener("click", () => {
+        document.getElementById("opreModal").style.display = "none";
+      });
+
+      document
+        .getElementById("saveOpreBtn")
+        .addEventListener("click", async () => {
+          const opre_code = document.getElementById("opre_code").value.trim();
+          const opre_rev = document.getElementById("opre_rev").value.trim();
+          const opre_eff = document.getElementById("opre_eff").value;
+
+          if (!opre_code || !opre_rev || !opre_eff) {
+            alert("⚠️ กรุณากรอกข้อมูลให้ครบ");
+            return;
+          }
+
+          const res = await window.opre.insert({
+            opre_code,
+            opre_rev,
+            opre_eff,
+          });
+
+          if (res.success) {
+            alert("✅ " + res.message);
+            // reset
+            document.getElementById("opre_code").value = "";
+            document.getElementById("opre_rev").value = "";
+            document.getElementById("opre_eff").value = "";
+            document.getElementById("opreModal").style.display = "none";
+          } else {
+            alert("❌ " + (res.error || "Insert ล้มเหลว"));
+          }
+        });
 
       window.addEventListener("login-success", (e) => {
         const user = e.detail;
