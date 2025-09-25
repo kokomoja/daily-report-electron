@@ -8,10 +8,10 @@ const fs = require("fs");
 
 // Config SQL Server
 const config = {
-  server: "192.168.7.110",
+  server: "192.168.99.253",
   database: "opDb",
   user: "sa",
-  password: "123456",
+  password: "@1234",
   options: {
     encrypt: false,
     trustServerCertificate: true,
@@ -181,12 +181,12 @@ ipcMain.handle("insert-report", async (event, data) => {
       .input("recorder_name", sql.VarChar(50), data.recorder_name)
       .input("opre_id", sql.Int, data.opre_id || null) // ✅ เพิ่ม opre_id
       .query(`
-        INSERT INTO dailyReport
-        (op_date, machine, operator, job, start_time, stop_time,
-         op_hour, recorder_name, time_stamp, opre_id)
-        VALUES (@op_date, @machine, @operator, @job, @start_time, @stop_time,
-          DATEDIFF(MINUTE, @start_time, @stop_time), @recorder_name, GETDATE(), @opre_id)
-      `);
+            INSERT INTO dailyReport
+            (op_date, machine, operator, job, start_time, stop_time,
+            op_hour, recorder_name, time_stamp, opre_id)
+            VALUES (@op_date, @machine, @operator, @job, @start_time, @stop_time,
+              DATEDIFF(MINUTE, @start_time, @stop_time), @recorder_name, GETDATE(), @opre_id)
+          `);
 
     return { success: true, message: "บันทึกเรียบร้อย" };
   } catch (err) {
@@ -398,25 +398,27 @@ ipcMain.handle("export-pdf", async (event, date) => {
       path.join(__dirname, "fonts", "THSarabunNew Bold.ttf") // ✅ ใช้ขีดกลาง
     );
 
-    // ✅ ใส่โลโก้มุมซ้ายบน
-    const logoPath = path.join(__dirname, "assets", "pct.png"); // อย่าลืมแปลงจาก .ico เป็น .png ก่อน
+    // ✅ โลโก้มุมซ้ายบน
+    const logoPath = path.join(__dirname, "assets", "pct.png");
     const logoSize = 70;
     doc.image(logoPath, 30, 30, { width: logoSize });
 
+    // ✅ หัวกระดาษ
     doc
       .font("THSarabunNewBold")
       .fontSize(26)
       .text("บริษัท พี.ซี.ปิโตรเลียมแอนด์เทอร์มินอล จำกัด", 50, 25, {
         align: "center",
       });
+    doc.moveDown(0.1);
 
-    doc.moveDown(0.3);
     doc
       .font("THSarabunNew")
       .fontSize(22)
       .text("แผนการปฏิบัติงานแผนกเทกอง / เครื่องมือหนัก", { align: "center" });
     doc.moveDown(0.2);
 
+    // ✅ กล่อง Revision
     doc.save();
     let revisionText = "-";
     if (reports[0]?.opre_show) {
@@ -439,14 +441,15 @@ ipcMain.handle("export-pdf", async (event, date) => {
     const textHeight = doc.heightOfString(revisionText, {
       width: boxWidth - 10,
     });
-    const textY = boxY + (boxHeight - textHeight) / 2; // ตรงกลางกล่อง
+    const textY = boxY + (boxHeight - textHeight) / 2;
 
     doc.text(revisionText, boxX + 5, textY, {
       width: boxWidth - 10,
-      align: "center", // ✅ จัดกลางแนวนอน
+      align: "center",
     });
     doc.restore();
 
+    // ✅ วันที่
     const reportDate = new Date(reports[0].op_date);
     const thaiMonths = [
       "มกราคม",
@@ -464,20 +467,20 @@ ipcMain.handle("export-pdf", async (event, date) => {
     ];
     const formattedDate = `${reportDate.getDate()} ${thaiMonths[reportDate.getMonth()]} ${reportDate.getFullYear() + 543}`;
 
-    // ✅ ให้ข้อความวันที่อยู่ตรงกลาง ไม่ไปกินพื้นที่กล่องขวา
-    const centerWidth = 300; // ความกว้างโซนกลาง (ปรับได้)
-    const centerX = (doc.page.width - centerWidth) / 2; // คำนวณจุดเริ่มกลาง
+    const centerWidth = 300;
+    const centerX = (doc.page.width - centerWidth) / 2;
 
     doc
       .font("THSarabunNew")
       .fontSize(16)
       .text(`วันที่ ${formattedDate}`, centerX, 100, {
-        // y=80 เลื่อนลงไม่ให้ทับหัวบริษัท
         width: centerWidth,
         align: "center",
       });
 
     doc.moveDown(1);
+
+    // ✅ ตาราง
     const headers = [
       "ลำดับ",
       "วันที่",
@@ -492,17 +495,22 @@ ipcMain.handle("export-pdf", async (event, date) => {
     let startX = 30;
     let startY = doc.y + 10;
 
+    // header
     headers.forEach((h, i) => {
-      doc.rect(startX, startY, columnWidths[i], 30).stroke();
-      doc.text(h, startX + 5, startY + 8, {
+      doc.rect(startX, startY, columnWidths[i], 25).stroke();
+      doc.fontSize(16).text(h, startX + 5, startY + 6, {
         width: columnWidths[i] - 10,
         align: "center",
       });
       startX += columnWidths[i];
     });
 
-    let rowY = startY + 30;
-    reports.forEach((r, idx) => {
+    const rowHeight = 25;
+    let rowY = startY + 25; // ✅ ประกาศตรงนี้ให้ชัดเจน
+
+    // ถ้ามีหลาย row เกินหน้าเดียว ตอนนี้เราจะไม่บีบอัตโนมัติแล้ว
+    // (แต่ถ้าอยากบังคับหน้าเดียว ให้ใช้ slice() จำกัดจำนวนแถว)
+    reports.slice(0, 20).forEach((r, idx) => {
       startX = 30;
       const row = [
         idx + 1,
@@ -516,21 +524,73 @@ ipcMain.handle("export-pdf", async (event, date) => {
       ];
 
       row.forEach((cell, i) => {
-        doc.rect(startX, rowY, columnWidths[i], 25).stroke();
-        doc.text(cell.toString(), startX + 3, rowY + 7, {
+        doc.rect(startX, rowY, columnWidths[i], rowHeight).stroke();
+        // ✅ แก้ขนาดข้อความเป็น 16
+        doc.fontSize(16).text(cell.toString(), startX + 3, rowY + 5, {
           width: columnWidths[i] - 6,
           align: "center",
         });
         startX += columnWidths[i];
       });
-      rowY += 25;
 
-      if (rowY > 550) {
-        doc.addPage({ size: "A4", layout: "landscape" });
-        rowY = 50;
-      }
+      rowY += rowHeight;
     });
 
+    // ================== ส่วนท้าย PDF ==================
+    let posY = rowY + 40;
+    const roles = [
+      "ผู้ควบคุมงานฝ่ายเทกอง",
+      "ผู้ช่วยผู้จัดการท่าเรือ",
+      "ผู้จัดการท่าเรือ",
+    ];
+
+    const sigBoxWidth = 200;
+    const gap = 40;
+    const totalWidth = sigBoxWidth * roles.length + gap * (roles.length - 1);
+    const footerStartX = (doc.page.width - totalWidth) / 2;
+
+    roles.forEach((role, i) => {
+      const posX = footerStartX + i * (sigBoxWidth + gap);
+
+      doc
+        .font("THSarabunNew")
+        .fontSize(16)
+        .text(role, posX, posY, { width: sigBoxWidth, align: "center" });
+
+      const lineY = posY + 50;
+      doc
+        .moveTo(posX + 20, lineY)
+        .lineTo(posX + sigBoxWidth - 20, lineY)
+        .stroke();
+
+      doc
+        .font("THSarabunNew")
+        .fontSize(14)
+        .text("(ลงชื่อ)", posX, lineY + 5, {
+          width: sigBoxWidth,
+          align: "center",
+        });
+
+      doc
+        .font("THSarabunNew")
+        .fontSize(14)
+        .text("วันที่ ____________________", posX, lineY + 25, {
+          width: sigBoxWidth,
+          align: "center",
+        });
+
+      // ✅ ข้อความ "จัดเก็บแฟ้ม 2 ปี" ใต้วันที่ของตำแหน่งขวาสุด
+      if (i === roles.length - 1) {
+        doc
+          .font("THSarabunNew")
+          .fontSize(14)
+          .text("จัดเก็บแฟ้ม 2 ปี", posX, lineY + 60, {
+            width: sigBoxWidth,
+            align: "center",
+          });
+      }
+    });
+    // ================== ปิดเอกสาร ==================
     doc.end();
 
     return { success: true, message: "Export PDF สำเร็จ", path: exportPath };

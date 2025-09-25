@@ -45,5 +45,14 @@
       "signAndEditExecutable": false,
       "forceCodeSigning": false
     }
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kokomoja/daily-report-electron.git"
+  },
+  "keywords": [],
+  "bugs": {
+    "url": "https://github.com/kokomoja/daily-report-electron/issues"
+  },
+  "homepage": "https://github.com/kokomoja/daily-report-electron#readme"
 }
